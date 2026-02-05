@@ -5,29 +5,31 @@ import re
 import streamlit as st
 
 # ==============================================================================
-# 1. HELPER: LIMPEZA DE JSON (A Correção do Erro 400)
+# 1. HELPER: EXTRAÇÃO CIRÚRGICA DE JSON (A Correção Definitiva)
 # ==============================================================================
 def clean_and_parse_json(text):
     """
-    Remove blocos de código markdown (```json ... ```) e tenta parsear.
-    Essencial porque não podemos usar response_mime_type='application/json' com Tools.
+    Extrai JSON válido de qualquer resposta suja com texto ou markdown.
     """
+    if not text: return None
+
+    # Tenta encontrar o primeiro '{' e o último '}'
+    # Isso ignora qualquer "Aqui está o seu JSON:" que venha antes
     try:
-        # Remove marcadores de código se existirem
-        clean_text = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
-        clean_text = re.sub(r'```\s*$', '', clean_text, flags=re.IGNORECASE)
-        clean_text = clean_text.strip()
+        # Regex que pega tudo entre o primeiro { e o último } (modo multilinhas)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            json_candidate = match.group(0)
+            return json.loads(json_candidate)
+    except:
+        pass
+
+    # Fallback: Tenta limpar tags markdown manualmente se o regex falhar
+    try:
+        clean_text = text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_text)
-    except Exception:
-        # Fallback agressivo: tenta achar o primeiro '{' e o último '}'
-        try:
-            start = clean_text.find('{')
-            end = clean_text.rfind('}') + 1
-            if start != -1 and end != -1:
-                return json.loads(clean_text[start:end])
-            return None
-        except:
-            return None
+    except:
+        return None
 
 # ==============================================================================
 # 2. PERSONALIDADE E PROMPTS
@@ -193,10 +195,11 @@ def investigate_company(query_input, api_key):
         }},
         "resumo_operacao": "Texto curto explicando quem é o grupo."
     }}
+    
+    IMPORTANTE: Comece a resposta com {{ e termine com }}.
     """
     
     try:
-        # AQUI MUDOU: Removemos response_mime_type='application/json'
         response_recon = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=recon_prompt,
@@ -205,19 +208,20 @@ def investigate_company(query_input, api_key):
                 temperature=0.1 
             )
         )
-        # Parse Manual usando a função helper
+        # Parse Seguro usando a função blindada
         data = clean_and_parse_json(response_recon.text)
         
-        # Se falhar o parse, lança erro para cair no except
-        if not data: raise ValueError("Falha no Parse JSON")
+        # Se mesmo blindado falhar, lança erro para cair no except
+        if not data: raise ValueError("JSON retornou vazio ou inválido.")
 
     except Exception as e:
-        # Fallback de segurança se a IA não retornar JSON ou a busca falhar
+        # Fallback de segurança 
+        print(f"Erro Real: {e}") # Log no console do servidor
         data = {
             "nome_grupo": query_input, "hectares_total": 0, "funcionarios_estimados": 0,
             "capital_social_estimado": 0, "culturas": [], 
             "verticalizacao": {"agroindustria": False}, 
-            "resumo_operacao": f"Erro na extração de dados: {str(e)}"
+            "resumo_operacao": f"Erro na extração IA (Tente novamente): {str(e)}"
         }
 
     # --------------------------------------------------------------------------
@@ -245,15 +249,18 @@ def investigate_company(query_input, api_key):
     {SYSTEM_PROMPT_SARA}
     """
     
-    response_analysis = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=analysis_prompt,
-        config=types.GenerateContentConfig(
-            tools=[google_search_tool]
+    try:
+        response_analysis = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=analysis_prompt,
+            config=types.GenerateContentConfig(
+                tools=[google_search_tool]
+            )
         )
-    )
-    
-    full_text = response_analysis.text
+        full_text = response_analysis.text
+    except:
+        full_text = "Erro ao gerar análise textual. Verifique os dados acima."
+
     sections = full_text.split('|||')
     
     if len(sections) < 2:

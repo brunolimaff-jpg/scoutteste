@@ -127,9 +127,14 @@ def calculate_sas_score(data):
 def investigate_company(company_name, api_key):
     genai.configure(api_key=api_key)
     
-    # Configuração do Modelo com Ferramentas de Busca (Google Search Grounding)
+    # Configuração do Modelo com Ferramentas de Busca (Sintaxe Correta)
+    # Usamos uma lista de dicionários agora, em vez de uma string
     tools_config = [{'google_search': {}}]
-    model = genai.GenerativeModel('gemini-2.5-pro', tools=tools)
+    
+    model = genai.GenerativeModel(
+        'gemini-2.5-flash', # Ou 'gemini-2.5-pro' se preferir qualidade
+        tools=tools_config
+    )
     
     # Passo 1: Buscar Dados Reais (Substitui o searchRealData do TS)
     search_prompt = f"""
@@ -179,4 +184,5 @@ def investigate_company(company_name, api_key):
     
 
     return hard_data, score_result, response_analysis.text
+
 

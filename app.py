@@ -44,7 +44,7 @@ st.markdown("""
 # ==========================================
 with st.sidebar:
     st.title("🕵️ Senior Scout 360")
-    st.caption("Intelligence Unit | v2.0 (Python Core)")
+    st.caption("Intelligence Unit | v2.1 (Financial Sniper)")
     st.markdown("---")
     
     # Input Principal
@@ -67,21 +67,21 @@ with st.sidebar:
             st.stop()
 
     st.markdown("---")
-    st.info("**Metodologia SAS 4.0**\n\nAgora com detecção automática de Grupos Econômicos e Holdings.")
+    st.info("**Metodologia SAS 4.0**\n\nInclui:\n- Rastreio de Grupo Econômico\n- Varredura de Fiagro/CRA\n- Análise de Governança")
 
 # ==========================================
 # 3. ÁREA PRINCIPAL (DASHBOARD)
 # ==========================================
 
 if not target_company:
-    # Tela de Boas-vindas (Vazia)
+    # Tela de Boas-vindas
     st.header("👋 Pronto para prospectar?")
     st.markdown("""
-    O **Senior Scout** não olha apenas o CNPJ. Ele investiga o **Grupo Econômico**.
+    O **Senior Scout** investiga além do óbvio.
     
-    **O que ele faz:**
-    1.  🛰️ **Rastreia** o grupo real por trás do nome.
-    2.  📐 **Calcula** o tamanho da operação (Hectares/Faturamento).
+    **O que ele faz agora:**
+    1.  🛰️ **Rastreia** o Grupo Econômico real.
+    2.  💰 **Caça** o dinheiro (Fiagro, CRA, Investimentos).
     3.  💎 **Classifica** o lead (Diamante, Ouro, Prata).
     4.  🧠 **Gera** o plano de ataque comercial.
     
@@ -115,6 +115,7 @@ else:
                 )
             
             with col_header_2:
+                # Título e Resumo
                 st.subheader(f"Dossiê: {data.get('nome_grupo', target_company)}")
                 st.markdown(f"**Resumo da Operação:** {data.get('resumo_operacao', 'N/D')}")
                 
@@ -130,6 +131,16 @@ else:
                     st.markdown(" ".join([f"`{b}`" for b in badges]))
 
             st.markdown("---")
+            
+            # === NOVIDADE: SEÇÃO DE FINANÇAS (SNIPER) ===
+            financas = data.get('movimentos_financeiros', [])
+            if financas:
+                st.markdown("#### 💰 Movimentos de Mercado & Governança")
+                # Exibe como bullet points destacados
+                for item in financas:
+                    st.markdown(f"- 🏦 **{item}**")
+                st.markdown("---")
+            # ============================================
 
             # 3. Cards de Inteligência (Dados Hard)
             st.markdown("### 📊 Raio-X da Operação")
@@ -141,22 +152,31 @@ else:
             capital = data.get('capital_social_estimado', 0)
             culturas = data.get('culturas', [])
             
-            c1.metric("Área Estimada", f"{hectares:,.0f} ha")
-            c2.metric("Funcionários", f"{funcs}")
-            c3.metric("Capital Aprox.", f"R$ {capital/1_000_000:.1f}M")
-            c4.metric("Culturas", ", ".join(culturas[:2]) if culturas else "Diversas")
+            # Formatação inteligente
+            hec_display = f"{hectares:,.0f} ha" if hectares > 0 else "N/D"
+            func_display = f"{funcs}" if funcs > 0 else "N/D"
+            cap_display = f"R$ {capital/1_000_000:.1f}M" if capital > 0 else "N/D"
+            cult_display = ", ".join(culturas[:2]) if culturas else "Diversas"
+            
+            # Se for dado inferido, avisa
+            if data.get('dados_inferidos'):
+                st.caption("⚠️ Alguns dados foram estimados por heurística de mercado.")
+
+            c1.metric("Área Estimada", hec_display)
+            c2.metric("Funcionários (Est.)", func_display)
+            c3.metric("Capital Aprox.", cap_display)
+            c4.metric("Culturas", cult_display)
 
             st.markdown("---")
 
             # 4. Análise Estratégica da Sara (Segmentada)
             st.markdown("### 🧠 Inteligência Estratégica (Agente Sara)")
             
-            # Garante que temos seções suficientes (fallback se a IA falhar na quebra)
+            # Garante que temos seções suficientes
             if not sections or len(sections) < 2:
                 st.warning("A IA gerou a análise em bloco único. Leia abaixo:")
                 st.markdown(sections[0] if sections else "Sem análise gerada.")
             else:
-                # Renderiza os Accordions (Expanders)
                 if len(sections) >= 1:
                     with st.expander("🏢 1. Perfil e Mercado", expanded=True):
                         st.markdown(sections[0])
@@ -173,7 +193,7 @@ else:
                     with st.expander("⚔️ 4. Plano de Ataque", expanded=True):
                         st.markdown(sections[3])
 
-            # 5. Breakdown do Score (Para Auditoria/Debate)
+            # 5. Breakdown do Score
             st.markdown("---")
             with st.expander("🔍 Ver Detalhes do Cálculo do Score"):
                 st.markdown("Entenda como chegamos a este número:")
@@ -183,14 +203,14 @@ else:
                     {"Pilar": "Músculo (Porte)", "Pontos": breakdown.get('Músculo', 0), "Max": 400},
                     {"Pilar": "Complexidade", "Pontos": breakdown.get('Complexidade', 0), "Max": 250},
                     {"Pilar": "Gente (Gestão)", "Pontos": breakdown.get('Gente', 0), "Max": 200},
-                    {"Pilar": "Momento (Tec)", "Pontos": breakdown.get('Momento', 0), "Max": 150},
+                    {"Pilar": "Momento (Tec/Gov)", "Pontos": breakdown.get('Momento', 0), "Max": 150},
                 ])
                 
-                # Gráfico de Barras Simples
-                st.bar_chart(df_score.set_index("Pilar")["Pontos"])
-                
-                # Tabela simples
-                st.table(df_score)
+                col_chart, col_table = st.columns(2)
+                with col_chart:
+                    st.bar_chart(df_score.set_index("Pilar")["Pontos"])
+                with col_table:
+                    st.table(df_score)
 
         except Exception as e:
             st.error("❌ Ocorreu um erro durante a investigação.")

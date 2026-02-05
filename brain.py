@@ -2,9 +2,35 @@ from google import genai
 from google.genai import types
 import json
 import re
+import streamlit as st
 
 # ==============================================================================
-# 1. PERSONALIDADE E PROMPTS ORIGINAIS (Extraído de saraPersonality.ts e geminiService.ts)
+# 1. HELPER: LIMPEZA DE JSON (A Correção do Erro 400)
+# ==============================================================================
+def clean_and_parse_json(text):
+    """
+    Remove blocos de código markdown (```json ... ```) e tenta parsear.
+    Essencial porque não podemos usar response_mime_type='application/json' com Tools.
+    """
+    try:
+        # Remove marcadores de código se existirem
+        clean_text = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
+        clean_text = re.sub(r'```\s*$', '', clean_text, flags=re.IGNORECASE)
+        clean_text = clean_text.strip()
+        return json.loads(clean_text)
+    except Exception:
+        # Fallback agressivo: tenta achar o primeiro '{' e o último '}'
+        try:
+            start = clean_text.find('{')
+            end = clean_text.rfind('}') + 1
+            if start != -1 and end != -1:
+                return json.loads(clean_text[start:end])
+            return None
+        except:
+            return None
+
+# ==============================================================================
+# 2. PERSONALIDADE E PROMPTS
 # ==============================================================================
 
 SARA_PHRASES = [
@@ -15,7 +41,6 @@ SARA_PHRASES = [
     "📡 Ajustando a antena da Starlink para achar sinal de dinheiro..."
 ]
 
-# Prompt exato do seu arquivo geminiService.ts
 SYSTEM_PROMPT_SARA = """
     VOCÊ É: Sara, Analista Sênior de Inteligência de Vendas (Agro).
     SUA MISSÃO: Escrever um briefing estratégico ("off-the-record") para um Executivo de Contas da Senior Sistemas.
@@ -43,7 +68,7 @@ SYSTEM_PROMPT_SARA = """
 """
 
 # ==============================================================================
-# 2. MOTOR SAS 4.0 - FÓRMULA EXATA (Extraído de marketEstimator.ts)
+# 3. MOTOR SAS 4.0 - FÓRMULA EXATA
 # ==============================================================================
 
 def calculate_sas_score(lead):
@@ -94,39 +119,30 @@ def calculate_sas_score(lead):
     natureza = lead.get('natureza_juridica', '')
     
     # --- CÁLCULO DOS PILARES ---
-    
-    # 1. Músculo
     pilar_musculo = min(lookup_capital(capital) + lookup_hectares(hectares), 400)
     
-    # 2. Complexidade
     cultura_pts = lookup_cultura(cultura)
     verticalizacao_pts = 0
     if lead.get('agroindustria'): verticalizacao_pts += 50
     if lead.get('silos'): verticalizacao_pts += 30
     
     complexidade_bruto = min(cultura_pts + verticalizacao_pts, 250)
-    # Regra Sementeiro (+15%)
     if 'semente' in str(cultura).lower():
         complexidade_bruto = min(complexidade_bruto * 1.15, 250)
     pilar_complexidade = int(complexidade_bruto)
     
-    # 3. Gente
     pilar_gente = min(lookup_funcionarios(funcionarios), 200)
     
-    # 4. Momento
     natureza_pts = lookup_natureza(natureza)
-    presenca_pts = 40 # Estimativa média se não temos dados de TI
+    presenca_pts = 40 
     if lead.get('vagas_ti'): presenca_pts += 25
     pilar_momento = min(natureza_pts + presenca_pts, 150)
     
-    # Bônus S.A.
     bonus = 50 if lookup_natureza(natureza) == 50 else 0
     
-    # Score Final
     sas_final = pilar_musculo + pilar_complexidade + pilar_gente + pilar_momento + bonus
     sas_final = min(sas_final, 1000)
     
-    # Tier
     if sas_final >= 751: tier = "DIAMANTE 💎"
     elif sas_final >= 501: tier = "OURO 🥇"
     elif sas_final >= 251: tier = "PRATA 🥈"
@@ -144,7 +160,7 @@ def calculate_sas_score(lead):
     }
 
 # ==============================================================================
-# 3. INTEGRAÇÃO INTELIGENTE (GOOGLE GENAI SDK)
+# 3. MOTOR DE IA (GOOGLE GENAI SDK - CORRIGIDO)
 # ==============================================================================
 
 def investigate_company(query_input, api_key):
@@ -152,28 +168,20 @@ def investigate_company(query_input, api_key):
     google_search_tool = types.Tool(google_search=types.GoogleSearch())
     
     # --------------------------------------------------------------------------
-    # PASSO 1: RECONHECIMENTO DE GRUPO (A correcao para Jequitibá)
+    # PASSO 1: RECONHECIMENTO DE GRUPO (SEM response_mime_type)
     # --------------------------------------------------------------------------
-    # Em vez de buscar direto o CNPJ, perguntamos primeiro sobre a estrutura do grupo.
-    
     recon_prompt = f"""
     ATUE COMO: Investigador Corporativo Sênior.
     ALVO: "{query_input}"
     
     TAREFA CRÍTICA: Identificar se este alvo faz parte de um GRUPO ECONÔMICO ou FAMILIAR maior.
-    Muitas vezes o nome dado é apenas uma fazenda ou holding, mas a operação real é muito maior.
     
-    Pesquise profundamente na web (notícias, LinkedIn, relatórios de sustentabilidade, processos judiciais):
-    1. Nome do Grupo Econômico principal.
-    2. Área total plantada DO GRUPO (somando todas as fazendas).
-    3. Culturas principais.
-    4. Se possuem Armazéns, Sementeiras, Algodoeiras ou Indústria.
-    5. Quem são os sócios/família principais.
+    Pesquise profundamente na web (notícias, LinkedIn, relatórios).
+    Retorne APENAS um JSON válido (sem texto antes ou depois) com estes campos:
     
-    Retorne APENAS um JSON:
     {{
         "nome_grupo": "Nome do Grupo",
-        "hectares_total": numero (estimativa do grupo todo),
+        "hectares_total": numero (estimativa do grupo todo, SOMENTE NUMEROS),
         "funcionarios_estimados": numero,
         "capital_social_estimado": numero (soma aproximada),
         "culturas": ["Soja", "Milho", "Algodão", etc],
@@ -188,29 +196,33 @@ def investigate_company(query_input, api_key):
     """
     
     try:
+        # AQUI MUDOU: Removemos response_mime_type='application/json'
         response_recon = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=recon_prompt,
             config=types.GenerateContentConfig(
                 tools=[google_search_tool],
-                response_mime_type='application/json',
-                temperature=0.1 # Baixa temperatura para ser preciso nos dados
+                temperature=0.1 
             )
         )
-        data = json.loads(response_recon.text)
+        # Parse Manual usando a função helper
+        data = clean_and_parse_json(response_recon.text)
+        
+        # Se falhar o parse, lança erro para cair no except
+        if not data: raise ValueError("Falha no Parse JSON")
+
     except Exception as e:
-        # Fallback de segurança
+        # Fallback de segurança se a IA não retornar JSON ou a busca falhar
         data = {
             "nome_grupo": query_input, "hectares_total": 0, "funcionarios_estimados": 0,
             "capital_social_estimado": 0, "culturas": [], 
             "verticalizacao": {"agroindustria": False}, 
-            "resumo_operacao": f"Erro na busca: {str(e)}"
+            "resumo_operacao": f"Erro na extração de dados: {str(e)}"
         }
 
     # --------------------------------------------------------------------------
-    # PASSO 2: CÁLCULO DO SCORE (Usando os dados do GRUPO)
+    # PASSO 2: CÁLCULO DO SCORE
     # --------------------------------------------------------------------------
-    # Adaptamos o JSON do passo 1 para o formato que a função SAS espera
     lead_formatado = {
         'capital_social': data.get('capital_social_estimado', 0),
         'hectares': data.get('hectares_total', 0),
@@ -218,15 +230,14 @@ def investigate_company(query_input, api_key):
         'funcionarios': data.get('funcionarios_estimados', 0),
         'agroindustria': data.get('verticalizacao', {}).get('agroindustria', False),
         'silos': data.get('verticalizacao', {}).get('silos', False),
-        'natureza_juridica': 'Ltda' # Default conservador se não achar
+        'natureza_juridica': 'Ltda'
     }
     
     score_result = calculate_sas_score(lead_formatado)
     
     # --------------------------------------------------------------------------
-    # PASSO 3: GERAÇÃO DA NARRATIVA SARA (Usando Prompt Original)
+    # PASSO 3: GERAÇÃO DA NARRATIVA SARA
     # --------------------------------------------------------------------------
-    
     analysis_prompt = f"""
     CONTEXTO DO CLIENTE (JSON): {json.dumps(data)}
     SCORE CALCULADO: {score_result['score']} ({score_result['tier']})
@@ -238,15 +249,13 @@ def investigate_company(query_input, api_key):
         model='gemini-2.5-flash',
         contents=analysis_prompt,
         config=types.GenerateContentConfig(
-            tools=[google_search_tool] # Sara pode pesquisar mais se precisar para escrever
+            tools=[google_search_tool]
         )
     )
     
-    # Tratamento para separar os blocos "|||"
     full_text = response_analysis.text
     sections = full_text.split('|||')
     
-    # Se a IA esquecer de separar (acontece), entregamos o texto puro
     if len(sections) < 2:
         sections = [full_text, "", "", ""]
         

@@ -2,79 +2,73 @@ from google import genai
 from google.genai import types
 import json
 import re
-import streamlit as st
+import math
 
 # ==============================================================================
-# 1. HELPER: EXTRAÇÃO CIRÚRGICA DE JSON (A Correção Definitiva)
+# 1. HELPER: EXTRAÇÃO E LIMPEZA
 # ==============================================================================
 def clean_and_parse_json(text):
-    """
-    Extrai JSON válido de qualquer resposta suja com texto ou markdown.
-    """
     if not text: return None
-
-    # Tenta encontrar o primeiro '{' e o último '}'
-    # Isso ignora qualquer "Aqui está o seu JSON:" que venha antes
     try:
-        # Regex que pega tudo entre o primeiro { e o último } (modo multilinhas)
         match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            json_candidate = match.group(0)
-            return json.loads(json_candidate)
-    except:
-        pass
-
-    # Fallback: Tenta limpar tags markdown manualmente se o regex falhar
+        if match: return json.loads(match.group(0))
+    except: pass
     try:
         clean_text = text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_text)
-    except:
-        return None
+    except: return None
 
 # ==============================================================================
 # 2. PERSONALIDADE E PROMPTS
 # ==============================================================================
-
-SARA_PHRASES = [
-    "☕ Enchendo a garrafa de café e calibrando o GPS...",
-    "🚜 Ligando os motores e verificando o óleo da inteligência...",
-    "👢 Calçando a botina para entrar no mato digital...",
-    "🤠 Ajeitando o chapéu: hora de caçar oportunidades...",
-    "📡 Ajustando a antena da Starlink para achar sinal de dinheiro..."
-]
-
 SYSTEM_PROMPT_SARA = """
     VOCÊ É: Sara, Analista Sênior de Inteligência de Vendas (Agro).
     SUA MISSÃO: Escrever um briefing estratégico ("off-the-record") para um Executivo de Contas da Senior Sistemas.
     
-    O QUE VOCÊ VAI RECEBER: Um JSON com dados brutos da empresa (Faturamento, Cultura, Verticalização, Notícias).
-    O QUE VOCÊ DEVE ENTREGAR: 4 BLOCOS de texto distintos, escritos em PROSA FLUIDA, DIRETA e ANALÍTICA.
+    ESTRUTURA OBRIGATÓRIA DA RESPOSTA (Separada por '|||'):
+    [Perfil e Mercado] ||| [Complexidade e Dores] ||| [Fit Senior] ||| [Plano de Ataque]
     
-    REGRAS DE TOM E ESTILO:
-    1. ZERO CORPORATÊS: Não use frases vazias.
-    2. REALPOLITIK: Fale da verdade nua e crua.
-    3. CAUSA & EFEITO: Conecte os dados.
-    4. ESPECIFICIDADE: Use os números do JSON.
-
-    REGRAS DE OURO DO PORTFÓLIO:
-    - Agroindústria: Venda GAtec (Originação/Indústria) + ERP (Backoffice).
-    - Produtor: Venda GAtec (Campo) + ERP (Fiscal).
-
-    SAÍDA STRICT (RÍGIDA):
-    1. NÃO use Introduções ("Aqui está...", "Com base nos dados...").
-    2. NÃO use Títulos Markdown (como '# Seção 1: Perfil').
-    3. Retorne OBRIGATORIAMENTE 4 blocos de texto separados pela string delimitadora '|||'.
-    
-    ESTRUTURA EXATA DA RESPOSTA:
-    [Texto do Perfil e Mercado] ||| [Texto da Complexidade Operacional e Dores] ||| [Texto da Proposta de Valor / Fit Senior] ||| [Texto dos Insights de Ataque e Abordagem]
+    DIRETRIZES DE CONTEÚDO:
+    1. USE OS DADOS FINANCEIROS: Se o JSON diz que eles emitiram Fiagro ou CRA, você TEM que mencionar isso. Isso indica governança e dinheiro.
+    2. REALPOLITIK: Se eles têm 35k hectares e auditoria, eles não são "produtores rurais", são uma CORPORAÇÃO. Trate-os assim.
+    3. FALE DE DINHEIRO: Mencione os fundos, parceiros financeiros (Suno, XP, etc) se aparecerem nos dados.
 """
 
 # ==============================================================================
-# 3. MOTOR SAS 4.0 - FÓRMULA EXATA
+# 3. MOTOR SAS 4.0 (COM HEURÍSTICAS DE CORREÇÃO)
 # ==============================================================================
+def heuristic_fill(lead):
+    """
+    Se a busca na web falhar em trazer números exatos, usamos heurísticas de mercado
+    para não zerar o score de uma operação gigante.
+    """
+    hectares = lead.get('hectares_total', 0)
+    
+    # HEURÍSTICA 1: Estimativa de Funcionários (se for 0)
+    # Grãos Alta Tec: ~1 func a cada 400ha | Grãos Média: ~1 a cada 300ha
+    # HF/Cana/Sementes: Muito mais gente.
+    if lead.get('funcionarios_estimados', 0) == 0 and hectares > 0:
+        fator = 350 # Padrão Grãos
+        culturas_str = str(lead.get('culturas', [])).lower()
+        if 'cana' in culturas_str or 'batata' in culturas_str or 'alho' in culturas_str or 'semente' in culturas_str:
+            fator = 150 # Culturas intensivas exigem mais gente
+        
+        lead['funcionarios_estimados'] = math.ceil(hectares / fator)
+        lead['dados_inferidos'] = True # Flag para avisar no front
+
+    # HEURÍSTICA 2: Estimativa de Capital Operacional (se for 0)
+    # Custo Brasil Grãos: ~R$ 5.000 a R$ 8.000 / ha de custo operacional
+    if lead.get('capital_social_estimado', 0) == 0 and hectares > 0:
+        lead['capital_social_estimado'] = hectares * 2000 # Estimativa conservadora de capital social necessário
+        lead['dados_inferidos'] = True
+
+    return lead
 
 def calculate_sas_score(lead):
-    # Lookup Tables
+    # Aplica correções antes de calcular
+    lead = heuristic_fill(lead)
+
+    # Tabelas de Pontuação
     def lookup_capital(val):
         if val >= 100_000_000: return 200
         if val >= 50_000_000: return 150
@@ -91,12 +85,11 @@ def calculate_sas_score(lead):
     
     def lookup_cultura(txt):
         txt = str(txt).lower() if txt else ""
-        if 'bioenergia' in txt or 'cana' in txt: return 150
-        if 'semente' in txt or 'seed' in txt: return 130
-        if 'algod' in txt or 'cotton' in txt: return 120
-        if 'café' in txt or 'coffee' in txt: return 110
-        if 'soja' in txt or 'milho' in txt or 'gr' in txt: return 80
-        if 'gado' in txt or 'boi' in txt or 'pecu' in txt: return 30
+        if 'cana' in txt: return 150
+        if 'semente' in txt: return 130
+        if 'algod' in txt: return 120
+        if 'café' in txt or 'alho' in txt or 'batata' in txt: return 110
+        if 'soja' in txt or 'milho' in txt: return 80
         return 50
 
     def lookup_funcionarios(val):
@@ -106,44 +99,32 @@ def calculate_sas_score(lead):
         if val >= 50: return 30
         return 0
     
-    def lookup_natureza(txt):
-        txt = str(txt).lower() if txt else ""
-        if 's.a' in txt or 'anônima' in txt: return 50
-        if 'cooperativa' in txt: return 15
-        if 'ltda' in txt: return 20
-        return 10
-
-    # Extração de dados (com defaults seguros)
-    capital = lead.get('capital_social', 0)
-    hectares = lead.get('hectares', 0)
-    cultura = lead.get('cultura_principal', '')
-    funcionarios = lead.get('funcionarios', 0)
-    natureza = lead.get('natureza_juridica', '')
+    # Extração
+    capital = lead.get('capital_social_estimado', 0)
+    hectares = lead.get('hectares_total', 0)
+    cultura = ', '.join(lead.get('culturas', []))
+    funcionarios = lead.get('funcionarios_estimados', 0)
     
-    # --- CÁLCULO DOS PILARES ---
+    # Cálculo
     pilar_musculo = min(lookup_capital(capital) + lookup_hectares(hectares), 400)
     
     cultura_pts = lookup_cultura(cultura)
-    verticalizacao_pts = 0
-    if lead.get('agroindustria'): verticalizacao_pts += 50
-    if lead.get('silos'): verticalizacao_pts += 30
+    vert_pts = 0
+    vert = lead.get('verticalizacao', {})
+    if vert.get('agroindustria'): vert_pts += 50
+    if vert.get('silos'): vert_pts += 30
+    if vert.get('sementeira'): vert_pts += 30
     
-    complexidade_bruto = min(cultura_pts + verticalizacao_pts, 250)
-    if 'semente' in str(cultura).lower():
-        complexidade_bruto = min(complexidade_bruto * 1.15, 250)
-    pilar_complexidade = int(complexidade_bruto)
+    pilar_complexidade = min(cultura_pts + vert_pts, 250)
     
     pilar_gente = min(lookup_funcionarios(funcionarios), 200)
     
-    natureza_pts = lookup_natureza(natureza)
-    presenca_pts = 40 
-    if lead.get('vagas_ti'): presenca_pts += 25
-    pilar_momento = min(natureza_pts + presenca_pts, 150)
-    
-    bonus = 50 if lookup_natureza(natureza) == 50 else 0
-    
-    sas_final = pilar_musculo + pilar_complexidade + pilar_gente + pilar_momento + bonus
-    sas_final = min(sas_final, 1000)
+    # Momento: Se tem Fiagro/CRA, ganha pontos de "S.A." (Governança)
+    movimentos = str(lead.get('movimentos_financeiros', '')).lower()
+    tem_gov = 'fiagro' in movimentos or 'cra' in movimentos or 'auditoria' in movimentos
+    pilar_momento = 100 if tem_gov else 60
+
+    sas_final = pilar_musculo + pilar_complexidade + pilar_gente + pilar_momento
     
     if sas_final >= 751: tier = "DIAMANTE 💎"
     elif sas_final >= 501: tier = "OURO 🥇"
@@ -151,7 +132,7 @@ def calculate_sas_score(lead):
     else: tier = "BRONZE 🥉"
     
     return {
-        "score": sas_final,
+        "score": int(sas_final),
         "tier": tier,
         "breakdown": {
             "Músculo": pilar_musculo,
@@ -162,108 +143,103 @@ def calculate_sas_score(lead):
     }
 
 # ==============================================================================
-# 3. MOTOR DE IA (GOOGLE GENAI SDK - CORRIGIDO)
+# 4. AGENTES DE INVESTIGAÇÃO (PIPELINE DUPLO)
 # ==============================================================================
 
 def investigate_company(query_input, api_key):
     client = genai.Client(api_key=api_key)
     google_search_tool = types.Tool(google_search=types.GoogleSearch())
     
-    # --------------------------------------------------------------------------
-    # PASSO 1: RECONHECIMENTO DE GRUPO (SEM response_mime_type)
-    # --------------------------------------------------------------------------
+    # --- AGENTE 1: RECONHECIMENTO OPERACIONAL ---
+    # Foca em Hectares, Culturas e Grupo
     recon_prompt = f"""
-    ATUE COMO: Investigador Corporativo Sênior.
-    ALVO: "{query_input}"
+    ATUE COMO: Investigador Agrícola. ALVO: "{query_input}"
     
-    TAREFA CRÍTICA: Identificar se este alvo faz parte de um GRUPO ECONÔMICO ou FAMILIAR maior.
+    Descubra a estrutura física do Grupo Econômico:
+    1. Área total (Hectares). Se achar números diferentes, pegue o maior/mais recente.
+    2. Culturas (Soja, Milho, Algodão, Cana, HF).
+    3. Infraestrutura (Silos, Sementeiras, Algodoeiras).
     
-    Pesquise profundamente na web (notícias, LinkedIn, relatórios).
-    Retorne APENAS um JSON válido (sem texto antes ou depois) com estes campos:
-    
+    Retorne JSON:
     {{
-        "nome_grupo": "Nome do Grupo",
-        "hectares_total": numero (estimativa do grupo todo, SOMENTE NUMEROS),
-        "funcionarios_estimados": numero,
-        "capital_social_estimado": numero (soma aproximada),
-        "culturas": ["Soja", "Milho", "Algodão", etc],
-        "verticalizacao": {{
-            "agroindustria": boolean,
-            "sementeira": boolean,
-            "silos": boolean,
-            "algodoeira": boolean
-        }},
-        "resumo_operacao": "Texto curto explicando quem é o grupo."
+        "nome_grupo": "Nome",
+        "hectares_total": numero,
+        "culturas": ["lista"],
+        "verticalizacao": {{ "agroindustria": bool, "sementeira": bool, "silos": bool }}
     }}
-    
-    IMPORTANTE: Comece a resposta com {{ e termine com }}.
+    Comece com {{ e termine com }}.
     """
     
     try:
-        response_recon = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=recon_prompt,
-            config=types.GenerateContentConfig(
-                tools=[google_search_tool],
-                temperature=0.1 
-            )
+        resp_recon = client.models.generate_content(
+            model='gemini-2.5-flash', contents=recon_prompt,
+            config=types.GenerateContentConfig(tools=[google_search_tool], temperature=0.1)
         )
-        # Parse Seguro usando a função blindada
-        data = clean_and_parse_json(response_recon.text)
-        
-        # Se mesmo blindado falhar, lança erro para cair no except
-        if not data: raise ValueError("JSON retornou vazio ou inválido.")
-
+        data_ops = clean_and_parse_json(resp_recon.text) or {}
     except Exception as e:
-        # Fallback de segurança 
-        print(f"Erro Real: {e}") # Log no console do servidor
-        data = {
-            "nome_grupo": query_input, "hectares_total": 0, "funcionarios_estimados": 0,
-            "capital_social_estimado": 0, "culturas": [], 
-            "verticalizacao": {"agroindustria": False}, 
-            "resumo_operacao": f"Erro na extração IA (Tente novamente): {str(e)}"
-        }
+        data_ops = {"nome_grupo": query_input, "hectares_total": 0}
 
-    # --------------------------------------------------------------------------
-    # PASSO 2: CÁLCULO DO SCORE
-    # --------------------------------------------------------------------------
-    lead_formatado = {
-        'capital_social': data.get('capital_social_estimado', 0),
-        'hectares': data.get('hectares_total', 0),
-        'cultura_principal': ', '.join(data.get('culturas', [])),
-        'funcionarios': data.get('funcionarios_estimados', 0),
-        'agroindustria': data.get('verticalizacao', {}).get('agroindustria', False),
-        'silos': data.get('verticalizacao', {}).get('silos', False),
-        'natureza_juridica': 'Ltda'
-    }
+    # Nome refinado para a busca financeira (Ex: "Grupo Jequitibá Agro")
+    grupo_nome = data_ops.get('nome_grupo', query_input)
+
+    # --- AGENTE 2: SNIPER FINANCEIRO (Deep Dive) ---
+    # Foca EXCLUSIVAMENTE em dinheiro, fundos e auditoria
+    fin_prompt = f"""
+    ATUE COMO: Analista de Mercado de Capitais. ALVO: "{grupo_nome}"
     
-    score_result = calculate_sas_score(lead_formatado)
+    Vasculhe a web procurando ESPECIFICAMENTE por:
+    1. Emissões de CRA (Certificados de Recebíveis do Agronegócio).
+    2. Fiagro (Fundos de Investimento) que investiram neles (Ex: Suno, XP, Valora).
+    3. Notícias de M&A ou Auditoria.
+    4. Capital Social (Procure em sites como Econodata, Casa dos Dados).
+    5. Faturamento estimado.
     
-    # --------------------------------------------------------------------------
-    # PASSO 3: GERAÇÃO DA NARRATIVA SARA
-    # --------------------------------------------------------------------------
+    Retorne JSON:
+    {{
+        "capital_social_estimado": numero (somente numeros),
+        "funcionarios_estimados": numero (tente achar no LinkedIn/Glassdoor),
+        "movimentos_financeiros": ["Lista de fatos: Ex: Emissão de CRA de R$ 50M", "Fiagro Suno SNFZ11", "Auditoria XYZ"],
+        "resumo_financeiro": "Texto curto sobre a robustez financeira."
+    }}
+    Comece com {{ e termine com }}.
+    """
+    
+    try:
+        resp_fin = client.models.generate_content(
+            model='gemini-2.5-flash', contents=fin_prompt,
+            config=types.GenerateContentConfig(tools=[google_search_tool], temperature=0.1)
+        )
+        data_fin = clean_and_parse_json(resp_fin.text) or {}
+    except:
+        data_fin = {}
+
+    # --- FUSÃO DE DADOS ---
+    final_data = {**data_ops, **data_fin}
+    
+    # Se ainda estiver sem resumo operacional, cria um básico
+    if 'resumo_operacao' not in final_data:
+        final_data['resumo_operacao'] = f"Grupo com {final_data.get('hectares_total', '?')} ha. {final_data.get('resumo_financeiro', '')}"
+
+    # --- CÁLCULO E ANÁLISE ---
+    score_result = calculate_sas_score(final_data)
+    
     analysis_prompt = f"""
-    CONTEXTO DO CLIENTE (JSON): {json.dumps(data)}
-    SCORE CALCULADO: {score_result['score']} ({score_result['tier']})
+    CONTEXTO COMPLETO: {json.dumps(final_data)}
+    SCORE: {score_result['score']} ({score_result['tier']})
     
     {SYSTEM_PROMPT_SARA}
     """
     
     try:
-        response_analysis = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=analysis_prompt,
-            config=types.GenerateContentConfig(
-                tools=[google_search_tool]
-            )
+        resp_analysis = client.models.generate_content(
+            model='gemini-2.5-flash', contents=analysis_prompt,
+            config=types.GenerateContentConfig(tools=[google_search_tool])
         )
-        full_text = response_analysis.text
+        full_text = resp_analysis.text
     except:
-        full_text = "Erro ao gerar análise textual. Verifique os dados acima."
+        full_text = "Erro na análise."
 
     sections = full_text.split('|||')
-    
-    if len(sections) < 2:
-        sections = [full_text, "", "", ""]
+    if len(sections) < 2: sections = [full_text, "", "", ""]
         
-    return data, score_result, sections
+    return final_data, score_result, sections

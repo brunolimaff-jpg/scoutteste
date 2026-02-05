@@ -21,6 +21,18 @@ def clean_and_parse_json(text):
 # ==============================================================================
 # 2. PERSONALIDADE E PROMPTS
 # ==============================================================================
+
+# AQUI ESTÁ A LISTA QUE FALTAVA
+SARA_PHRASES = [
+    "☕ Enchendo a garrafa de café e calibrando o GPS...",
+    "🚜 Ligando os motores e verificando o óleo da inteligência...",
+    "👢 Calçando a botina para entrar no mato digital...",
+    "🤠 Ajeitando o chapéu: hora de caçar oportunidades...",
+    "📡 Ajustando a antena da Starlink para achar sinal de dinheiro...",
+    "📊 Cruzando dados de satélite com balanços financeiros...",
+    "🚁 Sobrevoando a operação em busca de gargalos..."
+]
+
 SYSTEM_PROMPT_SARA = """
     VOCÊ É: Sara, Analista Sênior de Inteligência de Vendas (Agro).
     SUA MISSÃO: Escrever um briefing estratégico ("off-the-record") para um Executivo de Contas da Senior Sistemas.
@@ -45,8 +57,6 @@ def heuristic_fill(lead):
     hectares = lead.get('hectares_total', 0)
     
     # HEURÍSTICA 1: Estimativa de Funcionários (se for 0)
-    # Grãos Alta Tec: ~1 func a cada 400ha | Grãos Média: ~1 a cada 300ha
-    # HF/Cana/Sementes: Muito mais gente.
     if lead.get('funcionarios_estimados', 0) == 0 and hectares > 0:
         fator = 350 # Padrão Grãos
         culturas_str = str(lead.get('culturas', [])).lower()
@@ -57,9 +67,8 @@ def heuristic_fill(lead):
         lead['dados_inferidos'] = True # Flag para avisar no front
 
     # HEURÍSTICA 2: Estimativa de Capital Operacional (se for 0)
-    # Custo Brasil Grãos: ~R$ 5.000 a R$ 8.000 / ha de custo operacional
     if lead.get('capital_social_estimado', 0) == 0 and hectares > 0:
-        lead['capital_social_estimado'] = hectares * 2000 # Estimativa conservadora de capital social necessário
+        lead['capital_social_estimado'] = hectares * 2000 # Estimativa conservadora
         lead['dados_inferidos'] = True
 
     return lead
@@ -151,7 +160,6 @@ def investigate_company(query_input, api_key):
     google_search_tool = types.Tool(google_search=types.GoogleSearch())
     
     # --- AGENTE 1: RECONHECIMENTO OPERACIONAL ---
-    # Foca em Hectares, Culturas e Grupo
     recon_prompt = f"""
     ATUE COMO: Investigador Agrícola. ALVO: "{query_input}"
     
@@ -179,11 +187,9 @@ def investigate_company(query_input, api_key):
     except Exception as e:
         data_ops = {"nome_grupo": query_input, "hectares_total": 0}
 
-    # Nome refinado para a busca financeira (Ex: "Grupo Jequitibá Agro")
     grupo_nome = data_ops.get('nome_grupo', query_input)
 
     # --- AGENTE 2: SNIPER FINANCEIRO (Deep Dive) ---
-    # Foca EXCLUSIVAMENTE em dinheiro, fundos e auditoria
     fin_prompt = f"""
     ATUE COMO: Analista de Mercado de Capitais. ALVO: "{grupo_nome}"
     
@@ -192,12 +198,11 @@ def investigate_company(query_input, api_key):
     2. Fiagro (Fundos de Investimento) que investiram neles (Ex: Suno, XP, Valora).
     3. Notícias de M&A ou Auditoria.
     4. Capital Social (Procure em sites como Econodata, Casa dos Dados).
-    5. Faturamento estimado.
     
     Retorne JSON:
     {{
         "capital_social_estimado": numero (somente numeros),
-        "funcionarios_estimados": numero (tente achar no LinkedIn/Glassdoor),
+        "funcionarios_estimados": numero,
         "movimentos_financeiros": ["Lista de fatos: Ex: Emissão de CRA de R$ 50M", "Fiagro Suno SNFZ11", "Auditoria XYZ"],
         "resumo_financeiro": "Texto curto sobre a robustez financeira."
     }}
@@ -216,7 +221,6 @@ def investigate_company(query_input, api_key):
     # --- FUSÃO DE DADOS ---
     final_data = {**data_ops, **data_fin}
     
-    # Se ainda estiver sem resumo operacional, cria um básico
     if 'resumo_operacao' not in final_data:
         final_data['resumo_operacao'] = f"Grupo com {final_data.get('hectares_total', '?')} ha. {final_data.get('resumo_financeiro', '')}"
 

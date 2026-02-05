@@ -129,7 +129,7 @@ def investigate_company(company_name, api_key):
     
     # Configuração do Modelo com Ferramentas de Busca (Google Search Grounding)
     tools = 'google_search_retrieval'
-    model = genai.GenerativeModel('gemini-1.5-pro', tools=tools) # Usando 1.5 Pro (estável)
+    model = genai.GenerativeModel('gemini-2.5-pro', tools=tools)
     
     # Passo 1: Buscar Dados Reais (Substitui o searchRealData do TS)
     search_prompt = f"""
@@ -177,4 +177,5 @@ def investigate_company(company_name, api_key):
     
     response_analysis = model.generate_content(analysis_prompt)
     
+
     return hard_data, score_result, response_analysis.text

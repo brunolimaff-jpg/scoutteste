@@ -21,8 +21,6 @@ def clean_and_parse_json(text):
 # ==============================================================================
 # 2. PERSONALIDADE E PROMPTS
 # ==============================================================================
-
-# AQUI ESTÁ A LISTA QUE FALTAVA
 SARA_PHRASES = [
     "☕ Enchendo a garrafa de café e calibrando o GPS...",
     "🚜 Ligando os motores e verificando o óleo da inteligência...",
@@ -47,30 +45,37 @@ SYSTEM_PROMPT_SARA = """
 """
 
 # ==============================================================================
-# 3. MOTOR SAS 4.0 (COM HEURÍSTICAS DE CORREÇÃO)
+# 3. MOTOR SAS 4.0 (COM HEURÍSTICAS DE CORREÇÃO BLINDADAS)
 # ==============================================================================
 def heuristic_fill(lead):
     """
-    Se a busca na web falhar em trazer números exatos, usamos heurísticas de mercado
-    para não zerar o score de uma operação gigante.
+    Se a busca na web falhar em trazer números exatos, usamos heurísticas de mercado.
+    FIX: Usa 'or 0' para garantir que None não quebre a matemática.
     """
-    hectares = lead.get('hectares_total', 0)
+    # BLINDAGEM: Garante que None vire 0
+    hectares = lead.get('hectares_total') or 0
+    funcionarios = lead.get('funcionarios_estimados') or 0
+    capital = lead.get('capital_social_estimado') or 0
     
-    # HEURÍSTICA 1: Estimativa de Funcionários (se for 0)
-    if lead.get('funcionarios_estimados', 0) == 0 and hectares > 0:
+    # HEURÍSTICA 1: Estimativa de Funcionários
+    if funcionarios == 0 and hectares > 0:
         fator = 350 # Padrão Grãos
-        culturas_str = str(lead.get('culturas', [])).lower()
+        culturas_str = str(lead.get('culturas') or []).lower()
         if 'cana' in culturas_str or 'batata' in culturas_str or 'alho' in culturas_str or 'semente' in culturas_str:
-            fator = 150 # Culturas intensivas exigem mais gente
+            fator = 150 # Culturas intensivas
         
-        lead['funcionarios_estimados'] = math.ceil(hectares / fator)
-        lead['dados_inferidos'] = True # Flag para avisar no front
-
-    # HEURÍSTICA 2: Estimativa de Capital Operacional (se for 0)
-    if lead.get('capital_social_estimado', 0) == 0 and hectares > 0:
-        lead['capital_social_estimado'] = hectares * 2000 # Estimativa conservadora
+        funcionarios = math.ceil(hectares / fator)
+        lead['funcionarios_estimados'] = funcionarios
         lead['dados_inferidos'] = True
 
+    # HEURÍSTICA 2: Estimativa de Capital Operacional
+    if capital == 0 and hectares > 0:
+        capital = hectares * 2000 # Estimativa conservadora
+        lead['capital_social_estimado'] = capital
+        lead['dados_inferidos'] = True
+
+    # Atualiza o dicionário com valores numéricos seguros
+    lead['hectares_total'] = hectares
     return lead
 
 def calculate_sas_score(lead):
@@ -79,6 +84,7 @@ def calculate_sas_score(lead):
 
     # Tabelas de Pontuação
     def lookup_capital(val):
+        val = val or 0 # Segurança extra
         if val >= 100_000_000: return 200
         if val >= 50_000_000: return 150
         if val >= 10_000_000: return 100
@@ -86,6 +92,7 @@ def calculate_sas_score(lead):
         return 0
 
     def lookup_hectares(val):
+        val = val or 0
         if val >= 50_000: return 200
         if val >= 10_000: return 150
         if val >= 3_000: return 100
@@ -102,24 +109,25 @@ def calculate_sas_score(lead):
         return 50
 
     def lookup_funcionarios(val):
+        val = val or 0
         if val >= 500: return 120
         if val >= 200: return 90
         if val >= 100: return 60
         if val >= 50: return 30
         return 0
     
-    # Extração
-    capital = lead.get('capital_social_estimado', 0)
-    hectares = lead.get('hectares_total', 0)
-    cultura = ', '.join(lead.get('culturas', []))
-    funcionarios = lead.get('funcionarios_estimados', 0)
+    # Extração Segura
+    capital = lead.get('capital_social_estimado') or 0
+    hectares = lead.get('hectares_total') or 0
+    cultura = ', '.join(lead.get('culturas') or [])
+    funcionarios = lead.get('funcionarios_estimados') or 0
     
     # Cálculo
     pilar_musculo = min(lookup_capital(capital) + lookup_hectares(hectares), 400)
     
     cultura_pts = lookup_cultura(cultura)
     vert_pts = 0
-    vert = lead.get('verticalizacao', {})
+    vert = lead.get('verticalizacao') or {}
     if vert.get('agroindustria'): vert_pts += 50
     if vert.get('silos'): vert_pts += 30
     if vert.get('sementeira'): vert_pts += 30
@@ -128,8 +136,8 @@ def calculate_sas_score(lead):
     
     pilar_gente = min(lookup_funcionarios(funcionarios), 200)
     
-    # Momento: Se tem Fiagro/CRA, ganha pontos de "S.A." (Governança)
-    movimentos = str(lead.get('movimentos_financeiros', '')).lower()
+    # Momento
+    movimentos = str(lead.get('movimentos_financeiros') or '').lower()
     tem_gov = 'fiagro' in movimentos or 'cra' in movimentos or 'auditoria' in movimentos
     pilar_momento = 100 if tem_gov else 60
 

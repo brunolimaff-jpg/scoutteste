@@ -1,12 +1,12 @@
 from google import genai
 from google.genai import types
 import json
-import streamlit as st
-import random
+import re
 
-# ==========================================
-# 1. CONFIGURAÇÃO DA SARA (PERSONALIDADE)
-# ==========================================
+# ==============================================================================
+# 1. PERSONALIDADE E PROMPTS ORIGINAIS (Extraído de saraPersonality.ts e geminiService.ts)
+# ==============================================================================
+
 SARA_PHRASES = [
     "☕ Enchendo a garrafa de café e calibrando o GPS...",
     "🚜 Ligando os motores e verificando o óleo da inteligência...",
@@ -15,37 +15,39 @@ SARA_PHRASES = [
     "📡 Ajustando a antena da Starlink para achar sinal de dinheiro..."
 ]
 
+# Prompt exato do seu arquivo geminiService.ts
 SYSTEM_PROMPT_SARA = """
-VOCÊ É: Sara, Analista Sênior de Inteligência de Vendas (Agro).
-SUA MISSÃO: Escrever um briefing estratégico ("off-the-record") para um Executivo de Contas da Senior Sistemas.
+    VOCÊ É: Sara, Analista Sênior de Inteligência de Vendas (Agro).
+    SUA MISSÃO: Escrever um briefing estratégico ("off-the-record") para um Executivo de Contas da Senior Sistemas.
+    
+    O QUE VOCÊ VAI RECEBER: Um JSON com dados brutos da empresa (Faturamento, Cultura, Verticalização, Notícias).
+    O QUE VOCÊ DEVE ENTREGAR: 4 BLOCOS de texto distintos, escritos em PROSA FLUIDA, DIRETA e ANALÍTICA.
+    
+    REGRAS DE TOM E ESTILO:
+    1. ZERO CORPORATÊS: Não use frases vazias.
+    2. REALPOLITIK: Fale da verdade nua e crua.
+    3. CAUSA & EFEITO: Conecte os dados.
+    4. ESPECIFICIDADE: Use os números do JSON.
 
-O QUE VOCÊ VAI RECEBER: Dados da empresa e contexto de mercado.
-O QUE VOCÊ DEVE ENTREGAR: 4 BLOCOS de texto distintos, escritos em PROSA FLUIDA, DIRETA e ANALÍTICA.
+    REGRAS DE OURO DO PORTFÓLIO:
+    - Agroindústria: Venda GAtec (Originação/Indústria) + ERP (Backoffice).
+    - Produtor: Venda GAtec (Campo) + ERP (Fiscal).
 
-REGRAS DE TOM E ESTILO:
-1. ZERO CORPORATÊS: Não use frases vazias.
-2. REALPOLITIK: Fale da verdade nua e crua.
-3. CAUSA & EFEITO: Conecte os dados.
-4. ESPECIFICIDADE: Use os números fornecidos.
-
-ESTRUTURA DA RESPOSTA (Use Markdown):
-## 🏢 Perfil e Mercado
-(Texto analítico aqui)
-
-## 🚜 Complexidade Operacional e Dores
-(Foque em gargalos de safra, logística e gestão)
-
-## 💡 Fit com Soluções Senior (Gatec/ERP)
-(Por que eles precisam de nós?)
-
-## ⚔️ Plano de Ataque
-(Abordagem sugerida)
+    SAÍDA STRICT (RÍGIDA):
+    1. NÃO use Introduções ("Aqui está...", "Com base nos dados...").
+    2. NÃO use Títulos Markdown (como '# Seção 1: Perfil').
+    3. Retorne OBRIGATORIAMENTE 4 blocos de texto separados pela string delimitadora '|||'.
+    
+    ESTRUTURA EXATA DA RESPOSTA:
+    [Texto do Perfil e Mercado] ||| [Texto da Complexidade Operacional e Dores] ||| [Texto da Proposta de Valor / Fit Senior] ||| [Texto dos Insights de Ataque e Abordagem]
 """
 
-# ==========================================
-# 2. MOTOR SAS 4.0 (A MATEMÁTICA)
-# ==========================================
-def calculate_sas_score(data):
+# ==============================================================================
+# 2. MOTOR SAS 4.0 - FÓRMULA EXATA (Extraído de marketEstimator.ts)
+# ==============================================================================
+
+def calculate_sas_score(lead):
+    # Lookup Tables
     def lookup_capital(val):
         if val >= 100_000_000: return 200
         if val >= 50_000_000: return 150
@@ -61,13 +63,13 @@ def calculate_sas_score(data):
         return 0
     
     def lookup_cultura(txt):
-        txt = txt.lower() if txt else ""
+        txt = str(txt).lower() if txt else ""
         if 'bioenergia' in txt or 'cana' in txt: return 150
         if 'semente' in txt or 'seed' in txt: return 130
         if 'algod' in txt or 'cotton' in txt: return 120
         if 'café' in txt or 'coffee' in txt: return 110
-        if 'soja' in txt or 'milho' in txt: return 80
-        if 'gado' in txt or 'boi' in txt: return 30
+        if 'soja' in txt or 'milho' in txt or 'gr' in txt: return 80
+        if 'gado' in txt or 'boi' in txt or 'pecu' in txt: return 30
         return 50
 
     def lookup_funcionarios(val):
@@ -76,24 +78,55 @@ def calculate_sas_score(data):
         if val >= 100: return 60
         if val >= 50: return 30
         return 0
-
-    capital = data.get('capital_social', 0)
-    hectares = data.get('hectares', 0)
-    cultura = data.get('cultura_principal', '')
-    funcionarios = data.get('funcionarios', 0)
     
+    def lookup_natureza(txt):
+        txt = str(txt).lower() if txt else ""
+        if 's.a' in txt or 'anônima' in txt: return 50
+        if 'cooperativa' in txt: return 15
+        if 'ltda' in txt: return 20
+        return 10
+
+    # Extração de dados (com defaults seguros)
+    capital = lead.get('capital_social', 0)
+    hectares = lead.get('hectares', 0)
+    cultura = lead.get('cultura_principal', '')
+    funcionarios = lead.get('funcionarios', 0)
+    natureza = lead.get('natureza_juridica', '')
+    
+    # --- CÁLCULO DOS PILARES ---
+    
+    # 1. Músculo
     pilar_musculo = min(lookup_capital(capital) + lookup_hectares(hectares), 400)
     
+    # 2. Complexidade
     cultura_pts = lookup_cultura(cultura)
-    verticalizacao_pts = 50 if data.get('agroindustria') else 0
-    pilar_complexidade = min(cultura_pts + verticalizacao_pts, 250)
+    verticalizacao_pts = 0
+    if lead.get('agroindustria'): verticalizacao_pts += 50
+    if lead.get('silos'): verticalizacao_pts += 30
     
+    complexidade_bruto = min(cultura_pts + verticalizacao_pts, 250)
+    # Regra Sementeiro (+15%)
+    if 'semente' in str(cultura).lower():
+        complexidade_bruto = min(complexidade_bruto * 1.15, 250)
+    pilar_complexidade = int(complexidade_bruto)
+    
+    # 3. Gente
     pilar_gente = min(lookup_funcionarios(funcionarios), 200)
-    pilar_momento = 80 
     
-    sas_final = pilar_musculo + pilar_complexidade + pilar_gente + pilar_momento
+    # 4. Momento
+    natureza_pts = lookup_natureza(natureza)
+    presenca_pts = 40 # Estimativa média se não temos dados de TI
+    if lead.get('vagas_ti'): presenca_pts += 25
+    pilar_momento = min(natureza_pts + presenca_pts, 150)
+    
+    # Bônus S.A.
+    bonus = 50 if lookup_natureza(natureza) == 50 else 0
+    
+    # Score Final
+    sas_final = pilar_musculo + pilar_complexidade + pilar_gente + pilar_momento + bonus
     sas_final = min(sas_final, 1000)
     
+    # Tier
     if sas_final >= 751: tier = "DIAMANTE 💎"
     elif sas_final >= 501: tier = "OURO 🥇"
     elif sas_final >= 251: tier = "PRATA 🥈"
@@ -110,76 +143,111 @@ def calculate_sas_score(data):
         }
     }
 
-# ==========================================
-# 3. MOTOR DE IA (NOVA SDK: GOOGLE-GENAI)
-# ==========================================
-def investigate_company(company_name, api_key):
-    # Inicializa o Cliente da Nova SDK
+# ==============================================================================
+# 3. INTEGRAÇÃO INTELIGENTE (GOOGLE GENAI SDK)
+# ==============================================================================
+
+def investigate_company(query_input, api_key):
     client = genai.Client(api_key=api_key)
+    google_search_tool = types.Tool(google_search=types.GoogleSearch())
     
-    # Configuração da Ferramenta de Busca
-    google_search_tool = types.Tool(
-        google_search=types.GoogleSearch()
-    )
+    # --------------------------------------------------------------------------
+    # PASSO 1: RECONHECIMENTO DE GRUPO (A correcao para Jequitibá)
+    # --------------------------------------------------------------------------
+    # Em vez de buscar direto o CNPJ, perguntamos primeiro sobre a estrutura do grupo.
     
-    # Passo 1: Buscar Dados Reais (JSON Mode + Search)
-    search_prompt = f"""
-    Investigue a empresa agrícola: "{company_name}".
-    Procure dados exatos ou estimados na web sobre:
-    1. Hectares plantados (aprox).
-    2. Quantidade de funcionários.
-    3. Capital Social estimado.
-    4. Principais culturas (Soja, Milho, Algodão, Cana).
-    5. Se possui agroindústria própria.
+    recon_prompt = f"""
+    ATUE COMO: Investigador Corporativo Sênior.
+    ALVO: "{query_input}"
     
-    Retorne APENAS um JSON neste formato:
+    TAREFA CRÍTICA: Identificar se este alvo faz parte de um GRUPO ECONÔMICO ou FAMILIAR maior.
+    Muitas vezes o nome dado é apenas uma fazenda ou holding, mas a operação real é muito maior.
+    
+    Pesquise profundamente na web (notícias, LinkedIn, relatórios de sustentabilidade, processos judiciais):
+    1. Nome do Grupo Econômico principal.
+    2. Área total plantada DO GRUPO (somando todas as fazendas).
+    3. Culturas principais.
+    4. Se possuem Armazéns, Sementeiras, Algodoeiras ou Indústria.
+    5. Quem são os sócios/família principais.
+    
+    Retorne APENAS um JSON:
     {{
-        "capital_social": numero,
-        "hectares": numero,
-        "funcionarios": numero,
-        "cultura_principal": "texto",
-        "agroindustria": boolean,
-        "resumo_operacao": "texto curto"
+        "nome_grupo": "Nome do Grupo",
+        "hectares_total": numero (estimativa do grupo todo),
+        "funcionarios_estimados": numero,
+        "capital_social_estimado": numero (soma aproximada),
+        "culturas": ["Soja", "Milho", "Algodão", etc],
+        "verticalizacao": {{
+            "agroindustria": boolean,
+            "sementeira": boolean,
+            "silos": boolean,
+            "algodoeira": boolean
+        }},
+        "resumo_operacao": "Texto curto explicando quem é o grupo."
     }}
     """
     
-    # Chamada para buscar dados (JSON)
     try:
-        response_data = client.models.generate_content(
+        response_recon = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=search_prompt,
+            contents=recon_prompt,
             config=types.GenerateContentConfig(
                 tools=[google_search_tool],
-                response_mime_type='application/json'
+                response_mime_type='application/json',
+                temperature=0.1 # Baixa temperatura para ser preciso nos dados
             )
         )
-        hard_data = json.loads(response_data.text)
+        data = json.loads(response_recon.text)
     except Exception as e:
-        print(f"Erro JSON: {e}")
-        hard_data = {
-            "capital_social": 1000000, "hectares": 1000, 
-            "funcionarios": 50, "cultura_principal": "Grãos", 
-            "agroindustria": False, "resumo_operacao": "Dados estimados (Falha na extração)"
+        # Fallback de segurança
+        data = {
+            "nome_grupo": query_input, "hectares_total": 0, "funcionarios_estimados": 0,
+            "capital_social_estimado": 0, "culturas": [], 
+            "verticalizacao": {"agroindustria": False}, 
+            "resumo_operacao": f"Erro na busca: {str(e)}"
         }
 
-    # Passo 2: Calcular Score
-    score_result = calculate_sas_score(hard_data)
+    # --------------------------------------------------------------------------
+    # PASSO 2: CÁLCULO DO SCORE (Usando os dados do GRUPO)
+    # --------------------------------------------------------------------------
+    # Adaptamos o JSON do passo 1 para o formato que a função SAS espera
+    lead_formatado = {
+        'capital_social': data.get('capital_social_estimado', 0),
+        'hectares': data.get('hectares_total', 0),
+        'cultura_principal': ', '.join(data.get('culturas', [])),
+        'funcionarios': data.get('funcionarios_estimados', 0),
+        'agroindustria': data.get('verticalizacao', {}).get('agroindustria', False),
+        'silos': data.get('verticalizacao', {}).get('silos', False),
+        'natureza_juridica': 'Ltda' # Default conservador se não achar
+    }
     
-    # Passo 3: Gerar Narrativa Estratégica (Sara)
+    score_result = calculate_sas_score(lead_formatado)
+    
+    # --------------------------------------------------------------------------
+    # PASSO 3: GERAÇÃO DA NARRATIVA SARA (Usando Prompt Original)
+    # --------------------------------------------------------------------------
+    
     analysis_prompt = f"""
-    CONTEXTO DA EMPRESA: {json.dumps(hard_data)}
+    CONTEXTO DO CLIENTE (JSON): {json.dumps(data)}
     SCORE CALCULADO: {score_result['score']} ({score_result['tier']})
     
     {SYSTEM_PROMPT_SARA}
     """
     
-    # Chamada para análise textual (Sem JSON mode, com Search)
     response_analysis = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=analysis_prompt,
         config=types.GenerateContentConfig(
-            tools=[google_search_tool]
+            tools=[google_search_tool] # Sara pode pesquisar mais se precisar para escrever
         )
     )
     
-    return hard_data, score_result, response_analysis.text
+    # Tratamento para separar os blocos "|||"
+    full_text = response_analysis.text
+    sections = full_text.split('|||')
+    
+    # Se a IA esquecer de separar (acontece), entregamos o texto puro
+    if len(sections) < 2:
+        sections = [full_text, "", "", ""]
+        
+    return data, score_result, sections
